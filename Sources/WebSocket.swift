@@ -1301,6 +1301,7 @@ open class WebSocket : NSObject, StreamDelegate, WebSocketClient, WSStreamDelega
         cleanupStream()
         mutex.unlock()
         writeQueue.cancelAllOperations()
+        writeQueue.waitUntilAllOperationsAreFinished()
     }
 
 }
