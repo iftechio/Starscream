@@ -140,6 +140,11 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
 	
 	public var enableSOCKSProxy = false
     
+    private let dispatchSpecificKey = DispatchSpecificKey<String>()
+    public override init() {
+        FoundationStream.sharedWorkQueue.setSpecific(key: dispatchSpecificKey, value: "com.vluxe.starscream.websocket")
+    }
+
     public func connect(url: URL, port: Int, timeout: TimeInterval, ssl: SSLSettings, completion: @escaping ((Error?) -> Void)) {
         var readStream: Unmanaged<CFReadStream>?
         var writeStream: Unmanaged<CFWriteStream>?
@@ -246,18 +251,28 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
     }
     
     public func cleanup() {
-        if let stream = inputStream {
-            stream.delegate = nil
-            CFReadStreamSetDispatchQueue(stream, nil)
-            stream.close()
+        func clean() {
+            if let stream = inputStream {
+                stream.delegate = nil
+                CFReadStreamSetDispatchQueue(stream, nil)
+                stream.close()
+            }
+            if let stream = outputStream {
+                stream.delegate = nil
+                CFWriteStreamSetDispatchQueue(stream, nil)
+                stream.close()
+            }
+            outputStream = nil
+            inputStream = nil
         }
-        if let stream = outputStream {
-            stream.delegate = nil
-            CFWriteStreamSetDispatchQueue(stream, nil)
-            stream.close()
+
+        if let specific = DispatchQueue.getSpecific(key: dispatchSpecificKey) {
+            clean()
+        } else {
+            FoundationStream.sharedWorkQueue.sync {
+                clean()
+            }
         }
-        outputStream = nil
-        inputStream = nil
     }
     
     #if os(Linux) || os(watchOS)
