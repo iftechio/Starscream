@@ -267,6 +267,9 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
             let _ = inputStream
             let _ = outputStream
         }
+	
+	self.inputStream = nil
+	self.outputStream = nil
     }
     
     #if os(Linux) || os(watchOS)
