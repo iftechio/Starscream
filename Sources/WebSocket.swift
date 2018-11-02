@@ -132,7 +132,7 @@ public protocol WSStream {
 }
 
 open class FoundationStream : NSObject, WSStream, StreamDelegate  {
-    private static let sharedWorkQueue = DispatchQueue(label: "com.vluxe.starscream.websocket", attributes: [])
+    static let sharedWorkQueue = DispatchQueue(label: "com.vluxe.starscream.websocket", attributes: [])
     private var inputStream: InputStream?
     private var outputStream: OutputStream?
     public weak var delegate: WSStreamDelegate?
@@ -251,27 +251,21 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
     }
     
     public func cleanup() {
-        func clean() {
-            if let stream = inputStream {
-                stream.delegate = nil
-                CFReadStreamSetDispatchQueue(stream, nil)
-                stream.close()
-            }
-            if let stream = outputStream {
-                stream.delegate = nil
-                CFWriteStreamSetDispatchQueue(stream, nil)
-                stream.close()
-            }
-            outputStream = nil
-            inputStream = nil
+        if let stream = self.inputStream {
+            stream.delegate = nil
+            CFReadStreamSetDispatchQueue(stream, nil)
+            stream.close()
         }
-
-        if let specific = DispatchQueue.getSpecific(key: dispatchSpecificKey) {
-            clean()
-        } else {
-            FoundationStream.sharedWorkQueue.sync {
-                clean()
-            }
+        if let stream = self.outputStream {
+            stream.delegate = nil
+            CFWriteStreamSetDispatchQueue(stream, nil)
+            stream.close()
+        }
+        
+        // release on the shared work queue
+        FoundationStream.sharedWorkQueue.async { [inputStream, outputStream] in
+            let _ = inputStream
+            let _ = outputStream
         }
     }
     
@@ -483,6 +477,7 @@ open class WebSocket : NSObject, StreamDelegate, WebSocketClient, WSStreamDelega
             self.request.setValue(protocols.joined(separator: ","), forHTTPHeaderField: headerWSProtocolName)
         }
         writeQueue.maxConcurrentOperationCount = 1
+        writeQueue.underlyingQueue = FoundationStream.sharedWorkQueue
     }
     
     public convenience init(url: URL, protocols: [String]? = nil) {
