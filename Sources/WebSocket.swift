@@ -213,23 +213,38 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
         inStream.open()
         outStream.open()
         
-        var out = timeout// wait X seconds before giving up
-        FoundationStream.sharedWorkQueue.async { [weak self] in
-            while !outStream.hasSpaceAvailable {
-                usleep(100) // wait until the socket is ready
-                out -= 100
-                if out < 0 {
+        var remainingTime = timeout// wait X seconds before giving up
+        let intervalInUSec = 200_000    // 1 sec = 1000 millisec = 1_000_000 microsec(uSec) = 1_000_000_000 nanosec
+        
+        weak var wSelf = self
+        func checkIfTimeout() {
+            // deduct time
+            remainingTime -= Double(intervalInUSec)
+            // if still not ready
+            if !outStream.hasSpaceAvailable {
+                // if timeout
+                if remainingTime < 0 {
                     completion(WSError(type: .writeTimeoutError, message: "Timed out waiting for the socket to be ready for a write", code: 0))
                     return
                 } else if let error = outStream.streamError {
                     completion(error)
                     return // disconnectStream will be called.
-                } else if self == nil {
+                } else if wSelf == nil {
                     completion(WSError(type: .closeError, message: "socket object has been dereferenced", code: 0))
                     return
                 }
+                
+                // retry after some time
+                FoundationStream.sharedWorkQueue.asyncAfter(deadline: DispatchTime.now() + .microseconds(intervalInUSec)) {
+                    checkIfTimeout()
+                }
+            } else {
+                completion(nil) //success!
             }
-            completion(nil) //success!
+        }
+        
+        FoundationStream.sharedWorkQueue.asyncAfter(deadline: DispatchTime.now() + .microseconds(intervalInUSec)) {
+            checkIfTimeout()
         }
     }
     
@@ -251,28 +266,26 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
     }
     
     public func cleanup() {
-        func clean() {
-            if let stream = inputStream {
-                stream.delegate = nil
-                CFReadStreamSetDispatchQueue(stream, nil)
-                stream.close()
-            }
-            if let stream = outputStream {
-                stream.delegate = nil
-                CFWriteStreamSetDispatchQueue(stream, nil)
-                stream.close()
-            }
-            outputStream = nil
-            inputStream = nil
+        if let stream = self.inputStream {
+            stream.delegate = nil
+            CFReadStreamSetDispatchQueue(stream, nil)
+            stream.close()
         }
-
-        if DispatchQueue.getSpecific(key: dispatchSpecificKey) != nil {
-            clean()
-        } else {
-            FoundationStream.sharedWorkQueue.sync {
-                clean()
-            }
+        if let stream = self.outputStream {
+            stream.delegate = nil
+            CFWriteStreamSetDispatchQueue(stream, nil)
+            stream.close()
         }
+        
+        // release self and the streams on the shared work queue
+        FoundationStream.sharedWorkQueue.async { [inputStream, outputStream] in
+            let _ = self
+            let _ = inputStream
+            let _ = outputStream
+        }
+        
+        self.inputStream = nil
+        self.outputStream = nil
     }
     
     #if os(Linux) || os(watchOS)
@@ -726,11 +739,7 @@ open class WebSocket : NSObject, StreamDelegate, WebSocketClient, WSStreamDelega
      Disconnect the stream object and notifies the delegate.
      */
     private func disconnectStream(_ error: Error?, runDelegate: Bool = true) {
-        if error == nil {
-            writeQueue.waitUntilAllOperationsAreFinished()
-        } else {
-            writeQueue.cancelAllOperations()
-        }
+        writeQueue.cancelAllOperations()
         
         mutex.lock()
         cleanupStream()
